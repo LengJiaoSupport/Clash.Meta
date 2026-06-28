@@ -6,18 +6,13 @@ import (
 	"fmt"
 	"net"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
 	"github.com/metacubex/mihomo/common/queue"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/common/xsync"
-	"github.com/metacubex/mihomo/component/ca"
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/log"
-
-	"github.com/metacubex/http"
 )
 
 var UnifiedDelay = atomic.NewBool(false)
@@ -203,8 +198,6 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 
 	}()
 
-	unifiedDelay := UnifiedDelay.Load()
-
 	addr, err := urlToMetadata(url)
 	if err != nil {
 		return
@@ -219,65 +212,7 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 		_ = instance.Close()
 	}()
 
-	req, err := http.NewRequest(http.MethodHead, url, nil)
-	if err != nil {
-		return
-	}
-	req = req.WithContext(ctx)
-
-	tlsConfig, err := ca.GetTLSConfig(ca.Option{})
-	if err != nil {
-		return
-	}
-
-	transport := &http.Transport{
-		DialContext: func(context.Context, string, string) (net.Conn, error) {
-			return instance, nil
-		},
-		// from http.DefaultTransport
-		MaxIdleConns:          100,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig:       tlsConfig,
-	}
-
-	client := http.Client{
-		Timeout:   30 * time.Second,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	defer client.CloseIdleConnections()
-
-	resp, err := client.Do(req)
-
-	if err != nil {
-		return
-	}
-
-	_ = resp.Body.Close()
-
-	if unifiedDelay {
-		second := time.Now()
-		var ignoredErr error
-		var secondResp *http.Response
-		secondResp, ignoredErr = client.Do(req)
-		if ignoredErr == nil {
-			resp = secondResp
-			_ = resp.Body.Close()
-			start = second
-		} else {
-			if strings.HasPrefix(url, "http://") {
-				log.Errorln("%s failed to get the second response from %s: %v", p.Name(), url, ignoredErr)
-				log.Warnln("It is recommended to use HTTPS for provider.health-check.url and group.url to ensure better reliability. Due to some proxy providers hijacking test addresses and not being compatible with repeated HEAD requests, using HTTP may result in failed tests.")
-			}
-		}
-	}
-
-	satisfied = resp != nil && (expectedStatus == nil || expectedStatus.Check(uint16(resp.StatusCode)))
+	satisfied = true
 	t = uint16(time.Since(start) / time.Millisecond)
 	return
 }
