@@ -26,6 +26,9 @@ var (
 	updateInterval int
 
 	updatingGeo atomic.Bool
+
+	geoUpdaterCancel context.CancelFunc
+	GeoUpdateHook    func(geoType string, updating bool, skipped bool, updateErr error)
 )
 
 func GeoAutoUpdate() bool {
@@ -192,19 +195,31 @@ func updateGeoDatabases() error {
 
 var ErrGetDatabaseUpdateSkip = errors.New("GEO database is updating, skip")
 
-func UpdateGeoDatabases() error {
+func UpdateGeoDatabases() (err error) {
 	log.Infoln("[GEO] Start updating GEO database")
 
 	if updatingGeo.Load() {
-		return ErrGetDatabaseUpdateSkip
+		err = ErrGetDatabaseUpdateSkip
+		if GeoUpdateHook != nil {
+			GeoUpdateHook("all", false, true, err)
+		}
+		return err
 	}
 
 	updatingGeo.Store(true)
-	defer updatingGeo.Store(false)
+	if GeoUpdateHook != nil {
+		GeoUpdateHook("all", true, false, nil)
+	}
+	defer func() {
+		updatingGeo.Store(false)
+		if GeoUpdateHook != nil {
+			GeoUpdateHook("all", false, false, err)
+		}
+	}()
 
 	log.Infoln("[GEO] Updating GEO database")
 
-	if err := updateGeoDatabases(); err != nil {
+	if err = updateGeoDatabases(); err != nil {
 		log.Errorln("[GEO] update GEO database error: %s", err.Error())
 		return err
 	}
@@ -232,10 +247,22 @@ func getUpdateTime() (time time.Time, err error) {
 }
 
 func RegisterGeoUpdater() {
+	RegisterGeoUpdaterWithCancel()
+}
+
+func RegisterGeoUpdaterWithCancel() {
+	if geoUpdaterCancel != nil {
+		geoUpdaterCancel()
+		geoUpdaterCancel = nil
+	}
+
 	if updateInterval <= 0 {
 		log.Errorln("[GEO] Invalid update interval: %d", updateInterval)
 		return
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	geoUpdaterCancel = cancel
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(updateInterval) * time.Hour)
@@ -256,10 +283,15 @@ func RegisterGeoUpdater() {
 			}
 		}
 
-		for range ticker.C {
-			log.Infoln("[GEO] updating database every %d hours", updateInterval)
-			if err := UpdateGeoDatabases(); err != nil {
-				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
+		for {
+			select {
+			case <-ticker.C:
+				log.Infoln("[GEO] updating database every %d hours", updateInterval)
+				if err := UpdateGeoDatabases(); err != nil {
+					log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
+				}
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
