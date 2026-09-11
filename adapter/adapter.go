@@ -214,6 +214,9 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 
 	satisfied = true
 	t = uint16(time.Since(start) / time.Millisecond)
+	if t == 0 {
+		t = 1
+	}
 	return
 }
 
